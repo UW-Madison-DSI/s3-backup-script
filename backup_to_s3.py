@@ -25,6 +25,7 @@ Requirements:
     pip install boto3
 """
 
+
 import io
 import os
 import sys
@@ -32,8 +33,8 @@ import time
 import tarfile
 import argparse
 
-
 import boto3
+from tqdm import tqdm
 
 
 # ----------------------------------------------------------------------
@@ -64,20 +65,32 @@ S3_CONFIG = {
 PART_SIZE = 64 * 1024 * 1024  # 64 MiB
 
 
+def get_directory_size(path):
+    """Calculate the total size of all files in a directory tree in bytes."""
+    total_size = 0
+    for root, _, files in os.walk(path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if not os.path.islink(file_path):
+                try:
+                    total_size += os.path.getsize(file_path)
+                except OSError:
+                    pass
+    return total_size
+
+
 class S3MultipartWriter(io.RawIOBase):
     """
     File-like object that receives a byte stream and sends it to S3
     as a multipart upload.
-
-    tarfile can write directly to this object, so the complete archive
-    never has to exist on local disk.
     """
 
-    def __init__(self, s3, bucket, key, part_size=PART_SIZE):
+    def __init__(self, s3, bucket, key, pbar=None, part_size=PART_SIZE):
         self.s3 = s3
         self.bucket = bucket
         self.key = key
         self.part_size = part_size
+        self.pbar = pbar
 
         response = self.s3.create_multipart_upload(
             Bucket=self.bucket,
@@ -86,7 +99,6 @@ class S3MultipartWriter(io.RawIOBase):
         )
 
         self.upload_id = response["UploadId"]
-
         self.part_number = 1
         self.parts = []
         self.buffer = bytearray()
@@ -106,11 +118,14 @@ class S3MultipartWriter(io.RawIOBase):
         self.buffer.extend(data)
         self.total_bytes += len(data)
 
+        # Update progress bar as tar streams data
+        if self.pbar:
+            self.pbar.update(len(data))
+
         while len(self.buffer) >= self.part_size:
             self._upload_part(
                 bytes(self.buffer[:self.part_size])
             )
-
             del self.buffer[:self.part_size]
 
         return len(data)
@@ -118,10 +133,9 @@ class S3MultipartWriter(io.RawIOBase):
     def _upload_part(self, data):
         size_mb = len(data) / (1024 * 1024)
 
-        print(
-            f"Uploading part {self.part_number}: "
-            f"{size_mb:.1f} MiB",
-            flush=True,
+        # Use tqdm.write so terminal output doesn't break the progress bar
+        tqdm.write(
+            f"Uploading part {self.part_number}: {size_mb:.1f} MiB"
         )
 
         response = self.s3.upload_part(
@@ -146,12 +160,8 @@ class S3MultipartWriter(io.RawIOBase):
             return
 
         try:
-            # Upload the final part. It is allowed to be smaller
-            # than PART_SIZE.
             if self.buffer:
-                self._upload_part(
-                    bytes(self.buffer)
-                )
+                self._upload_part(bytes(self.buffer))
                 self.buffer.clear()
 
             if not self.parts:
@@ -160,18 +170,13 @@ class S3MultipartWriter(io.RawIOBase):
                     "No data was written to the S3 upload"
                 )
 
-            print(
-                "Completing S3 multipart upload...",
-                flush=True,
-            )
+            tqdm.write("Completing S3 multipart upload...")
 
             self.s3.complete_multipart_upload(
                 Bucket=self.bucket,
                 Key=self.key,
                 UploadId=self.upload_id,
-                MultipartUpload={
-                    "Parts": self.parts
-                },
+                MultipartUpload={"Parts": self.parts},
             )
 
             self.closed_ = True
@@ -195,17 +200,12 @@ class S3MultipartWriter(io.RawIOBase):
 
 
 def create_s3_client():
-    """
-    Create and return the boto3 S3 client using S3_CONFIG.
-    """
-
     client_args = {
         "endpoint_url": f"https://{S3_CONFIG['host']}",
         "aws_access_key_id": S3_CONFIG["key"],
         "aws_secret_access_key": S3_CONFIG["secret"],
     }
 
-    # Only specify a region if one was configured.
     if S3_CONFIG["region"]:
         client_args["region_name"] = S3_CONFIG["region"]
 
@@ -213,24 +213,8 @@ def create_s3_client():
 
 
 def create_object_key(source):
-    """
-    Create an S3 object key from the source directory name.
-
-    Example:
-
-        /mnt/backup-source/home/alice/projects
-
-    becomes:
-
-        backups/projects.tar
-    """
-
     source = os.path.abspath(source)
-
-    source_name = os.path.basename(
-        os.path.normpath(source)
-    )
-
+    source_name = os.path.basename(os.path.normpath(source))
     prefix = S3_CONFIG["prefix"].strip("/")
 
     if prefix:
@@ -240,64 +224,62 @@ def create_object_key(source):
 
 
 def backup_directory(source, bucket, key):
-    """
-    Create a tar archive of 'source' and stream it directly to S3.
-    """
-
     source = os.path.abspath(source)
 
     if not os.path.isdir(source):
-        raise ValueError(
-            f"Source is not a directory: {source}"
-        )
+        raise ValueError(f"Source is not a directory: {source}")
 
     print(f"Source: {source}")
     print(f"Destination: s3://{bucket}/{key}")
     print(f"S3 endpoint: https://{S3_CONFIG['host']}")
-    print()
-
+    print("Calculating source directory size...")
+    
+    total_size = get_directory_size(source)
     s3 = create_s3_client()
 
-    writer = S3MultipartWriter(
-        s3=s3,
-        bucket=bucket,
-        key=key,
-        part_size=PART_SIZE,
-    )
+    # Configure custom bar format to show uploaded vs total data, ETA, and elapsed time
+    bar_format = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
 
-    try:
-        # "w|" is tar's streaming mode.
-        #
-        # Unlike normal "w", tarfile does not need to seek backwards
-        # through the output archive.
-        with tarfile.open(
-            fileobj=writer,
-            mode="w|",
-        ) as tar:
+    with tqdm(
+        total=total_size,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+        desc="Streaming backup",
+        bar_format=bar_format,
+        dynamic_ncols=True,
+    ) as pbar:
 
-            archive_name = os.path.basename(
-                os.path.normpath(source)
-            )
+        writer = S3MultipartWriter(
+            s3=s3,
+            bucket=bucket,
+            key=key,
+            pbar=pbar,
+            part_size=PART_SIZE,
+        )
 
-            print(
-                f"Creating archive directory: "
-                f"{archive_name}/",
-                flush=True,
-            )
+        try:
+            with tarfile.open(
+                fileobj=writer,
+                mode="w|",
+            ) as tar:
 
-            tar.add(
-                source,
-                arcname=archive_name,
-                recursive=True,
-            )
+                archive_name = os.path.basename(
+                    os.path.normpath(source)
+                )
 
-    except Exception:
-        # If tar fails, make sure the incomplete S3 upload is removed.
-        writer._abort()
-        raise
+                tar.add(
+                    source,
+                    arcname=archive_name,
+                    recursive=True,
+                )
 
-    finally:
-        writer.close()
+        except Exception:
+            writer._abort()
+            raise
+
+        finally:
+            writer.close()
 
     total_mb = writer.total_bytes / (1024 * 1024)
     total_gb = total_mb / 1024
@@ -355,4 +337,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
