@@ -26,7 +26,7 @@ pixi install
 	```
 	2. or if you installed via pixi:
 	```bash
-	pixi run backup <path_to_dir_to_backup>
+	pixi run backup-to-s3 <path_to_dir_to_backup>
 	```
 3. confirm backup completes, and files are in expected s3 location
 
