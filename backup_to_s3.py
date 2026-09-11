@@ -22,20 +22,18 @@ The source should ideally be a read-only mount of an EBS snapshot.
 
 Requirements:
 
-    pip install boto3
+    pip install boto3 tqdm
 """
 
-
+import argparse
 import io
 import os
 import sys
-import time
 import tarfile
-import argparse
+import time
 
 import boto3
 from tqdm import tqdm
-
 
 # ----------------------------------------------------------------------
 # S3 configuration
@@ -44,17 +42,13 @@ from tqdm import tqdm
 S3_CONFIG = {
     # S3-compatible endpoint
     "host": "web.s3.wisc.edu",
-
     # S3 access credentials
     "key": "YOUR_ACCESS_KEY",
     "secret": "YOUR_NEW_SECRET_KEY",
-
     # Destination bucket
     "bucket": "YOUR_BUCKET_NAME",
-
     # Directory within the bucket where backups are stored
     "prefix": "",
-
     # Leave empty if the S3 service does not require a region
     "region": "",
 }
@@ -123,21 +117,12 @@ class S3MultipartWriter(io.RawIOBase):
             self.pbar.update(len(data))
 
         while len(self.buffer) >= self.part_size:
-            self._upload_part(
-                bytes(self.buffer[:self.part_size])
-            )
-            del self.buffer[:self.part_size]
+            self._upload_part(bytes(self.buffer[: self.part_size]))
+            del self.buffer[: self.part_size]
 
         return len(data)
 
     def _upload_part(self, data):
-        size_mb = len(data) / (1024 * 1024)
-
-        # Use tqdm.write so terminal output doesn't break the progress bar
-        tqdm.write(
-            f"Uploading part {self.part_number}: {size_mb:.1f} MiB"
-        )
-
         response = self.s3.upload_part(
             Bucket=self.bucket,
             Key=self.key,
@@ -145,14 +130,12 @@ class S3MultipartWriter(io.RawIOBase):
             PartNumber=self.part_number,
             Body=data,
         )
-
         self.parts.append(
             {
                 "PartNumber": self.part_number,
                 "ETag": response["ETag"],
             }
         )
-
         self.part_number += 1
 
     def close(self):
@@ -166,9 +149,7 @@ class S3MultipartWriter(io.RawIOBase):
 
             if not self.parts:
                 self._abort()
-                raise RuntimeError(
-                    "No data was written to the S3 upload"
-                )
+                raise RuntimeError("No data was written to the S3 upload")
 
             tqdm.write("Completing S3 multipart upload...")
 
@@ -233,7 +214,7 @@ def backup_directory(source, bucket, key):
     print(f"Destination: s3://{bucket}/{key}")
     print(f"S3 endpoint: https://{S3_CONFIG['host']}")
     print("Calculating source directory size...")
-    
+
     total_size = get_directory_size(source)
     s3 = create_s3_client()
 
@@ -249,7 +230,6 @@ def backup_directory(source, bucket, key):
         bar_format=bar_format,
         dynamic_ncols=True,
     ) as pbar:
-
         writer = S3MultipartWriter(
             s3=s3,
             bucket=bucket,
@@ -263,10 +243,7 @@ def backup_directory(source, bucket, key):
                 fileobj=writer,
                 mode="w|",
             ) as tar:
-
-                archive_name = os.path.basename(
-                    os.path.normpath(source)
-                )
+                archive_name = os.path.basename(os.path.normpath(source))
 
                 tar.add(
                     source,
@@ -292,10 +269,7 @@ def backup_directory(source, bucket, key):
 
 def main():
     parser = argparse.ArgumentParser(
-        description=(
-            "Stream a directory into an S3 multipart "
-            "upload as a tar archive."
-        )
+        description=("Stream a directory into an S3 multipart upload as a tar archive.")
     )
 
     parser.add_argument(
