@@ -33,7 +33,6 @@ import tarfile
 import time
 
 import boto3
-from dotenv import load_dotenv
 from tqdm import tqdm
 
 # ----------------------------------------------------------------------
@@ -54,8 +53,10 @@ S3_CONFIG = {
     "region": "",
 }
 
-# overwrite with values from .env file
+# overwrite with values from .env file if it exists
 if os.path.exists(".env"):
+    from dotenv import load_dotenv
+
     load_dotenv()
     print(".env file found, using creds in .env file.")
 
@@ -71,8 +72,7 @@ else:
     print("no .env file found, using creds from script.")
 
 
-# S3 multipart uploads require every part except the final part
-# to be at least 5 MiB.
+# S3 multipart uploads require every part except the final part >= 5 MiB.
 PART_SIZE = 64 * 1024 * 1024  # 64 MiB
 
 
@@ -129,11 +129,7 @@ class S3MultipartWriter(io.RawIOBase):
         self.buffer.extend(data)
         self.total_bytes += len(data)
 
-        # Update progress bar as tar streams data. Clamp the increment so
-        # the count never exceeds the total: tar adds per-file headers and
-        # block padding, so the stream is slightly larger than the raw
-        # directory size, and tqdm renders the total as "?" (blanking the
-        # bar) once n goes past it.
+        # ensure bar never goes past self.pbar.total from tar overhead
         if self.pbar:
             increment = len(data)
             if self.pbar.total is not None:
@@ -248,8 +244,6 @@ def backup_directory(source, bucket, key):
 
     total_size = get_directory_size(source)
     s3 = create_s3_client()
-
-    # Configure custom bar format to show uploaded vs total data, ETA, and elapsed time
     bar_format = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
 
     with tqdm(
