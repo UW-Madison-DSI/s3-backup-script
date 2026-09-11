@@ -112,9 +112,17 @@ class S3MultipartWriter(io.RawIOBase):
         self.buffer.extend(data)
         self.total_bytes += len(data)
 
-        # Update progress bar as tar streams data
+        # Update progress bar as tar streams data. Clamp the increment so
+        # the count never exceeds the total: tar adds per-file headers and
+        # block padding, so the stream is slightly larger than the raw
+        # directory size, and tqdm renders the total as "?" (blanking the
+        # bar) once n goes past it.
         if self.pbar:
-            self.pbar.update(len(data))
+            increment = len(data)
+            if self.pbar.total is not None:
+                remaining = self.pbar.total - self.pbar.n
+                increment = min(increment, max(remaining, 0))
+            self.pbar.update(increment)
 
         while len(self.buffer) >= self.part_size:
             self._upload_part(bytes(self.buffer[: self.part_size]))
@@ -159,6 +167,12 @@ class S3MultipartWriter(io.RawIOBase):
                 UploadId=self.upload_id,
                 MultipartUpload={"Parts": self.parts},
             )
+
+            # Snap the bar to 100% for a clean finish. The raw directory
+            # size slightly undercounts the tar stream, so the bar can
+            # otherwise stop just short of full.
+            if self.pbar and self.pbar.total is not None:
+                self.pbar.update(self.pbar.total - self.pbar.n)
 
             self.closed_ = True
 
