@@ -22,7 +22,7 @@ The source should ideally be a read-only mount of an EBS snapshot.
 
 Requirements:
 
-    pip install boto3 tqdm
+    pip install boto3 tqdm python-dotenv
 """
 
 import argparse
@@ -33,6 +33,7 @@ import tarfile
 import time
 
 import boto3
+from dotenv import load_dotenv
 from tqdm import tqdm
 
 # ----------------------------------------------------------------------
@@ -52,6 +53,22 @@ S3_CONFIG = {
     # Leave empty if the S3 service does not require a region
     "region": "",
 }
+
+# overwrite with values from .env file
+if os.path.exists(".env"):
+    load_dotenv()
+    print(".env file found, using creds in .env file.")
+
+    S3_CONFIG = S3_CONFIG | {
+        "host": os.environ.get("BACKUP_S3_HOST"),
+        "key": os.environ.get("BACKUP_S3_KEY"),
+        "secret": os.environ.get("BACKUP_S3_SECRET"),
+        "bucket": os.environ.get("BACKUP_S3_BUCKET"),
+        "prefix": os.environ.get("BACKUP_S3_PREFIX"),
+        "region": os.environ.get("BACKUP_S3_REGION"),
+    }
+else:
+    print("no .env file found, using creds from script.")
 
 
 # S3 multipart uploads require every part except the final part
