@@ -37,6 +37,7 @@ backup-to-s3 = "backup_to_s3:main"
 [tool.hatch.build.targets.wheel]
 only-include = ["backup_to_s3.py"]
 sources = ["."]
+exclude = ["./.env"]
 
 [tool.hatch.build.targets.sdist]
 include = ["backup_to_s3.py", "README.md", "pyproject.toml"]
