@@ -2,12 +2,22 @@
 
 ## 1. Script only
 Lightest weight option: use the backup script directly in an existing Python environment:
-1. make sure boto3 and tqdm are present in your environment:
+1. make sure `boto3`, `tqdm`, `certifi`, and `python-dotenv`* are present in your environment:
 	```bash
-	pip install boto3 tqdm
+	pip install boto3 tqdm certifi python-dotenv
 	```
+	\* you don't need python-dotenv if you're not going to use an .env file for your creds
 2. copy s3_backup_script.py from [the repo](https://raw.githubusercontent.com/UW-Madison-DSI/s3-backup-script/refs/heads/main/backup_to_s3.py) to a convenient location.
-3. Edit the s3_backup_script.py to enter your s3 credentials and bucket and save.
+3. Provide S3 credentials. Choose either:
+	1. Edit the `Backup_to_s3.py` script and enter creds there directly
+
+	OR
+
+	1. Create your .env file form the example.env
+		```bash
+		cp example.env .env
+		```
+	2. edit `.env` and enter your credentials there
 3. run the script to backup a directory to the s3 bucket you specified:
 	```bash
 	python3 s3_backup_script.py <dir_to_backup>
@@ -37,10 +47,28 @@ Create a separate Python environment isolated from your other work specifically 
 	cd s3-backup-script/
 	pixi install
 	```
-5. edit script to include your s3 credentials
+5. Provide your s3 credentials in an .env file:
+	1. Create your .env file form the example.env
+		```bash
+		cp example.env .env
+		```
+	2. edit `.env` and enter your credentials there
 6. run script:
 	```bash
 	pixi run backup-to-s3 <dir_to_backup>
 	```
 3. confirm backup completes, and files are in expected s3 location
 
+
+## Troubleshooting
+
+### `SSL validation failed ... CERTIFICATE_VERIFY_FAILED ... self-signed certificate in certificate chain`
+boto3 is verifying the S3 endpoint against a stale CA bundle. `botocore` only uses a current Mozilla root store when the `certifi` package is importable; otherwise it falls back to its own vendored `cacert.pem`, which is missing newer roots such as `emSign Root CA - G1` (the root `web.s3.wisc.edu` has chained to since September 2026).
+
+Fix, in order of preference:
+1. Install `certifi` in the environment running the script (`pip install certifi`, or `pixi install` after pulling this repo). The script picks it up automatically.
+2. Or point the script at your system's CA bundle in `.env`:
+	```bash
+	BACKUP_S3_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
+	```
+	(`AWS_CA_BUNDLE` is honoured by boto3 as well.)
