@@ -2,9 +2,9 @@
 
 ## 1. Script only
 Lightest weight option: use the backup script directly in an existing Python environment:
-1. make sure `boto3`, `tqdm`, and `python-dotenv`* are present in your environment:
+1. make sure `boto3`, `tqdm`, `certifi`, and `python-dotenv`* are present in your environment:
 	```bash
-	pip install boto3 tqdm python-dotenv
+	pip install boto3 tqdm certifi python-dotenv
 	```
 	\* you don't need python-dotenv if you're not going to use an .env file for your creds
 2. copy s3_backup_script.py from [the repo](https://raw.githubusercontent.com/UW-Madison-DSI/s3-backup-script/refs/heads/main/backup_to_s3.py) to a convenient location.
@@ -54,3 +54,16 @@ Create a separate Python environment isolated from your other work specifically 
 	```
 3. confirm backup completes, and files are in expected s3 location
 
+
+## Troubleshooting
+
+### `SSL validation failed ... CERTIFICATE_VERIFY_FAILED ... self-signed certificate in certificate chain`
+boto3 is verifying the S3 endpoint against a stale CA bundle. `botocore` only uses a current Mozilla root store when the `certifi` package is importable; otherwise it falls back to its own vendored `cacert.pem`, which is missing newer roots such as `emSign Root CA - G1` (the root `web.s3.wisc.edu` has chained to since September 2026).
+
+Fix, in order of preference:
+1. Install `certifi` in the environment running the script (`pip install certifi`, or `pixi install` after pulling this repo). The script picks it up automatically.
+2. Or point the script at your system's CA bundle in `.env`:
+	```bash
+	BACKUP_S3_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
+	```
+	(`AWS_CA_BUNDLE` is honoured by boto3 as well.)

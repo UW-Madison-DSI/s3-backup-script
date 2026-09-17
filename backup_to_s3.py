@@ -22,12 +22,13 @@ The source should ideally be a read-only mount of an EBS snapshot.
 
 Requirements:
 
-    pip install boto3 tqdm python-dotenv
+    pip install boto3 tqdm python-dotenv certifi
 """
 
 import argparse
 import io
 import os
+import ssl
 import sys
 import tarfile
 import time
@@ -103,6 +104,17 @@ class S3MultipartWriter(io.RawIOBase):
         self.part_size = part_size
         self.pbar = pbar
 
+        # Initialise all state before any network call. io.RawIOBase.__del__
+        # calls close() when the object is garbage collected, so close() must
+        # be safe to run even if create_multipart_upload() raises below.
+        self.upload_id = None
+        self.part_number = 1
+        self.parts = []
+        self.buffer = bytearray()
+        self.total_bytes = 0
+        self.aborted = False
+        self.closed_ = False
+
         response = self.s3.create_multipart_upload(
             Bucket=self.bucket,
             Key=self.key,
@@ -110,11 +122,6 @@ class S3MultipartWriter(io.RawIOBase):
         )
 
         self.upload_id = response["UploadId"]
-        self.part_number = 1
-        self.parts = []
-        self.buffer = bytearray()
-        self.total_bytes = 0
-        self.closed_ = False
 
     def writable(self):
         return True
@@ -122,6 +129,9 @@ class S3MultipartWriter(io.RawIOBase):
     def write(self, data):
         if self.closed_:
             raise ValueError("S3 writer is closed")
+
+        if self.aborted:
+            raise ValueError("S3 multipart upload was aborted")
 
         if not data:
             return 0
@@ -164,6 +174,11 @@ class S3MultipartWriter(io.RawIOBase):
             return
 
         try:
+            if self.upload_id is None or self.aborted:
+                # Nothing to finish: the upload was never created, or it was
+                # already aborted (e.g. after a failure while writing the tar).
+                return
+
             if self.buffer:
                 self._upload_part(bytes(self.buffer))
                 self.buffer.clear()
@@ -187,13 +202,21 @@ class S3MultipartWriter(io.RawIOBase):
             if self.pbar and self.pbar.total is not None:
                 self.pbar.update(self.pbar.total - self.pbar.n)
 
-            self.closed_ = True
-
         except Exception:
             self._abort()
             raise
 
+        finally:
+            # Mark closed even on failure so __del__ does not retry close().
+            self.closed_ = True
+            super().close()
+
     def _abort(self):
+        if self.upload_id is None or self.aborted:
+            return
+
+        self.aborted = True
+
         try:
             self.s3.abort_multipart_upload(
                 Bucket=self.bucket,
@@ -207,6 +230,45 @@ class S3MultipartWriter(io.RawIOBase):
             )
 
 
+def get_ca_bundle():
+    """
+    Return the path of the CA bundle boto3 should verify TLS against, or
+    None to let botocore use its own vendored bundle.
+
+    botocore only uses certifi when it is importable; otherwise it falls
+    back to a vendored cacert.pem that can lag behind the Mozilla root
+    store. That bundle lacks roots such as "emSign Root CA - G1", which
+    web.s3.wisc.edu began chaining to in September 2026.
+
+    Resolution order:
+        1. BACKUP_S3_CA_BUNDLE environment variable (explicit override)
+        2. certifi's bundle, if installed
+        3. the default CA file of the Python/OpenSSL build
+        4. None (botocore's vendored bundle)
+    """
+    override = os.environ.get("BACKUP_S3_CA_BUNDLE")
+    if override:
+        if not os.path.isfile(override):
+            raise FileNotFoundError(
+                f"BACKUP_S3_CA_BUNDLE points to a missing file: {override}"
+            )
+        return override
+
+    try:
+        import certifi
+
+        return certifi.where()
+    except ImportError:
+        pass
+
+    paths = ssl.get_default_verify_paths()
+    for candidate in (paths.cafile, paths.openssl_cafile):
+        if candidate and os.path.isfile(candidate):
+            return candidate
+
+    return None
+
+
 def create_s3_client():
     client_args = {
         "endpoint_url": f"https://{S3_CONFIG['host']}",
@@ -216,6 +278,10 @@ def create_s3_client():
 
     if S3_CONFIG["region"]:
         client_args["region_name"] = S3_CONFIG["region"]
+
+    ca_bundle = get_ca_bundle()
+    if ca_bundle:
+        client_args["verify"] = ca_bundle
 
     return boto3.client("s3", **client_args)
 
