@@ -9,11 +9,15 @@ Lightest weight option: use the backup script directly in an existing Python env
 	\* you don't need python-dotenv if you're not going to use an .env file for your creds
 2. copy s3_backup_script.py from [the repo](https://raw.githubusercontent.com/UW-Madison-DSI/s3-backup-script/refs/heads/main/backup_to_s3.py) to a convenient location.
 3. Provide S3 credentials. Choose either:
-	1. Edit the script and enter creds there directly
-	2. ```bash
+	1. Edit the `Backup_to_s3.py` script and enter creds there directly
+
+	OR
+
+	1. Create your .env file form the example.env
+		```bash
 		cp example.env .env
 		```
-		edit `.env` and enter your credentials there
+	2. edit `.env` and enter your credentials there
 3. run the script to backup a directory to the s3 bucket you specified:
 	```bash
 	python3 s3_backup_script.py <dir_to_backup>
@@ -44,7 +48,8 @@ Create a separate Python environment isolated from your other work specifically 
 	pixi install
 	```
 5. Provide your s3 credentials in an .env file:
-	1. ```bash
+	1. Create your .env file form the example.env
+		```bash
 		cp example.env .env
 		```
 	2. edit `.env` and enter your credentials there
