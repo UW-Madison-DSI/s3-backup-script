@@ -37,14 +37,20 @@ dev = [
 
 [project.scripts]
 backup-to-s3 = "backup_to_s3:main"
+backup-to-research-drive = "backup_to_research_drive:main"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["backup_to_s3.py"]
+only-include = ["backup_to_s3.py", "backup_to_research_drive.py"]
 sources = ["."]
 exclude = ["./.env"]
 
 [tool.hatch.build.targets.sdist]
-include = ["backup_to_s3.py", "README.md", "pyproject.toml"]
+include = [
+    "backup_to_s3.py",
+    "backup_to_research_drive.py",
+    "README.md",
+    "pyproject.toml",
+]
 
 
 # ----------------------------------------------------------------------
@@ -75,11 +81,12 @@ dev = { features = ["dev"], solve-group = "default" }
 
 [tool.pixi.tasks]
 backup = "backup-to-s3"
+backup-rd = "backup-to-research-drive"
 
 [tool.pixi.feature.dev.tasks]
 lint = "ruff check ."
 fmt = "ruff format ."
-typecheck = "mypy backup_to_s3.py"
+typecheck = "mypy backup_to_s3.py backup_to_research_drive.py"
 
 
 # ----------------------------------------------------------------------

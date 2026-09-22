@@ -58,7 +58,10 @@ S3_CONFIG = {
 if os.path.exists(".env"):
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # Pass the path explicitly: with no argument, load_dotenv() searches from
+    # the script's own directory rather than the current working directory
+    # that os.path.exists() just checked.
+    load_dotenv(".env")
     print(".env file found, using creds in .env file.")
 
     S3_CONFIG = S3_CONFIG | {
@@ -202,7 +205,7 @@ class S3MultipartWriter(io.RawIOBase):
             if self.pbar and self.pbar.total is not None:
                 self.pbar.update(self.pbar.total - self.pbar.n)
 
-        except Exception:
+        except BaseException:
             self._abort()
             raise
 
@@ -342,7 +345,10 @@ def backup_directory(source, bucket, key):
                     recursive=True,
                 )
 
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: a KeyboardInterrupt must also
+            # abort, otherwise the finally below would complete a truncated
+            # multipart upload as if it were the whole archive.
             writer._abort()
             raise
 
